@@ -147,6 +147,22 @@ def mirror_rotation(object, tophierarchy, senderOrientation, receiverOrientation
     return quat
 
 
+def get_user_defined_attributes(object):
+    # gets keyable user defined attributes visible in the objects channelbox
+    # returns list of lists
+
+    obj = pm.PyNode(object)
+
+    allAttrs = obj.listAttr(userDefined=True)
+
+    attrs = list()
+    for attr in allAttrs:
+        if pm.getAttr(attr, keyable=True) is True and pm.getAttr(attr, lock=True) is False:
+            attrs.append([attr.split('.')[-1], pm.getAttr(attr)])
+
+    return attrs
+
+
 def calculate_mirror_transformation(object, tophierarchy, chrOrientation, senderOrientation, receiverOrientation, senderTranslation, receiverTranslation, plane):
     # gets rotation and translation from object
     # mirrors over either world yz, xz, xy plane or an arbitrary plane in the scene
@@ -165,7 +181,9 @@ def calculate_mirror_transformation(object, tophierarchy, chrOrientation, sender
         rot = mirror_rotation(object, tophierarchy, senderOrientation, receiverOrientation, chrOrientation, plane)
         trans = mirror_translation(object.getTranslation('world'), senderTranslation, receiverTranslation, chrOrientation, plane)
 
-    return [rot, trans]
+    userAttrs = get_user_defined_attributes(object)
+
+    return [rot, trans, userAttrs]
 
 
 def get_objects_mirror_transformations(chrDict, namespace, frameRange, plane):
@@ -181,31 +199,34 @@ def get_objects_mirror_transformations(chrDict, namespace, frameRange, plane):
         tList = ['%s%s' % (namespace, obj)]
         transformList.append(tList)
 
-        if obj != chrDict['matches'][obj]:
-            tList = ['%s%s' % (namespace, chrDict['matches'][obj])]
-            transformList.append(tList)
-            hierarchy.pop(hierarchy.index(chrDict['matches'][obj]))
-
     for i in range(frameRange[0], frameRange[1] + 1):
 
         pm.currentTime(i)
 
-        for tList in transformList:
+        j = 0
+        for obj in hierarchy:
+            tList = transformList[j]
+            pyObj = pm.PyNode('%s%s' % (namespace, chrDict['matches'][obj]))
 
-            obj = pm.PyNode('%s%s' % (namespace, chrDict['matches'][tList[0]]))
-            receiverTranslation = chrDict['transformation'][tList[0]][1]
-            senderTranslation = chrDict['transformation'][chrDict['matches'][tList[0]]][1]
+            receiverTranslation = chrDict['transformation'][obj][1]
+            senderTranslation = chrDict['transformation'][chrDict['matches'][obj]][1]
             chrOrientation = chrDict['chrOrientation']
-            receiverOrientation = pm.datatypes.Quaternion(chrDict['transformation'][tList[0]][0])
-            senderOrientation = pm.datatypes.Quaternion(chrDict['transformation'][chrDict['matches'][tList[0]]][0])
+            receiverOrientation = pm.datatypes.Quaternion(chrDict['transformation'][obj][0])
+            senderOrientation = pm.datatypes.Quaternion(chrDict['transformation'][chrDict['matches'][obj]][0])
             tophierarchy = chrDict['topHierarchy']
-            tList.append(calculate_mirror_transformation(obj, tophierarchy, chrOrientation, senderOrientation, receiverOrientation, senderTranslation, receiverTranslation, plane))
+
+            tList.append(calculate_mirror_transformation(pyObj, tophierarchy, chrOrientation, senderOrientation, receiverOrientation, senderTranslation, receiverTranslation, plane))
+
+            j += 1
+
 
     return transformList
 
 
 def set_transformations(transformList, frameRange):
     # transforms each object as specified and sets a key on each frame in frameRange
+
+    pm.undoInfo(openChunk=True)
 
     j = 1
 
@@ -214,8 +235,18 @@ def set_transformations(transformList, frameRange):
 
         for tList in transformList:
             obj = pm.PyNode(tList[0])
+
             obj.setRotation(tList[j][0])
             obj.setTranslation(tList[j][1], 'world')
+
+            for attr in tList[j][2]:
+                try:
+                    pm.setAttr('%s.%s' % (tList[0], attr[0]), attr[1])
+                except AttributeError:
+                    continue
+
             pm.setKeyframe(obj)
 
         j += 1
+
+    pm.undoInfo(closeChunk=True)
